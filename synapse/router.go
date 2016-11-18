@@ -180,6 +180,8 @@ func (r *RouterCommon) FilterCorrelation(reports ServiceReport, otherServiceRepo
 		return reports
 	}
 
+	otherServiceReport.Service.ServerSort.Sort(&otherServiceReport.Reports)
+
 	res := []Report{}
 	for _, report := range reports.Reports {
 		// TODO support other filter
