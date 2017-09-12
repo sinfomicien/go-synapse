@@ -1,0 +1,49 @@
+logLevel: info
+apiPort: 65534
+routers:
+  - type: haproxy
+    configPath: ./hap.config
+    reloadCommand: [./haproxy_reload.sh]
+    global: [
+  "daemon",
+  "maxconn 4096",
+  "stats timeout 30s",
+  "stats socket %PWD%/haproxy.sock mode 666 level admin",
+  'user "${USER}"'
+]
+
+    defaults: [
+  "log      global",
+  "balance  roundrobin",
+  "option tcpka",
+  "timeout tunnel 1200s",
+]
+    listen:
+      stats:
+        - mode http
+        - bind :1936
+        - stats enable
+        - stats hide-version
+        - stats realm Haproxy\ Statistics
+        - stats uri /
+        - stats refresh 5s
+        - stats auth admin:admin
+        - timeout client  100s
+        - timeout server  100s
+        - timeout connect 100s
+        - timeout queue   100s
+    services:
+        - watcher:
+            type: zookeeper
+            hosts: [ "127.0.0.1:2181" ]
+            path: /tmp/lol
+          serverCorrelation: null
+          routerOptions:
+            frontend:
+                - mode tcp
+                - timeout client 31s
+                - bind 127.0.0.1:3318
+            backend:
+                - mode tcp
+                - timeout server 2m
+                - timeout connect 45s
