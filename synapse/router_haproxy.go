@@ -9,6 +9,7 @@ import (
 	"github.com/n0rad/go-erlog/errs"
 	"github.com/n0rad/go-erlog/logs"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -19,6 +20,7 @@ const PrometheusLabelSocketSuffix = "_socket"
 type RouterHaProxy struct {
 	RouterCommon
 	HaProxyClient
+	hapServerOptionsRegex *regexp.Regexp
 }
 type HapRouterOptions struct {
 	Frontend []string
@@ -47,7 +49,7 @@ func (r *RouterHaProxy) Init(s *Synapse) error {
 
 	r.synapse.routerUpdateFailures.WithLabelValues(r.Type + PrometheusLabelSocketSuffix).Set(0)
 	r.synapse.routerUpdateFailures.WithLabelValues(r.Type).Set(0)
-
+	r.hapServerOptionsRegex = regexp.MustCompile(`disabled`)
 	if r.ConfigPath == "" {
 		return errs.WithF(r.RouterCommon.fields, "ConfigPath is required for haproxy router")
 	}
@@ -60,17 +62,17 @@ func (r *RouterHaProxy) Init(s *Synapse) error {
 
 func (r *RouterHaProxy) isSocketUpdatable(report ServiceReport) bool {
 	previous := r.lastEvents[report.Service.Name]
-
-	if previous == nil || len(previous.Reports) != len(report.Reports) {
-		logs.WithF(r.RouterCommon.fields.WithField("previous", previous).WithField("current", report)).Debug("Report length is different")
+	if previous == nil {
+		logs.WithF(r.RouterCommon.fields.WithField("previous", previous).
+			WithField("current", report)).
+			Debug("Report length is different")
 		return false
 	}
 
 	for _, new := range report.Reports {
 		weightOnly := false
 		for _, old := range previous.Reports {
-			if new.Host == old.Host &&
-				new.Port == old.Port &&
+			if new.Port == old.Port &&
 				new.Name == old.Name &&
 				new.HaProxyServerOptions == old.HaProxyServerOptions {
 				weightOnly = true
@@ -79,26 +81,59 @@ func (r *RouterHaProxy) isSocketUpdatable(report ServiceReport) bool {
 		}
 
 		if !weightOnly {
-
-			logs.WithF(r.RouterCommon.fields.WithField("server", new)).Debug("Server was not existing or options has changed")
+			logs.WithF(r.RouterCommon.fields.WithField("server", new)).
+				Debug("Server was not existing or options has changed")
 			return false
 		}
 	}
 	return true
 }
 
+func reportInSlice(original []Report, copy Report) bool {
+	for _, i := range original {
+		if i.Name == copy.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RouterHaProxy) DiffWithOldReport(report ServiceReport) (ServiceReport, error) {
+	previous := r.lastEvents[report.Service.Name]
+	// Skip when previous reports is empty and if servers are added.
+	if previous == nil || len(previous.Reports) < len(report.Reports) {
+		return report, nil
+	}
+	for _, newReport := range previous.Reports {
+		removedReport := reportInSlice(report.Reports, newReport)
+		if !removedReport {
+			oldAddReport := newReport
+			logs.WithF(r.RouterCommon.fields.WithField("previous", newReport)).
+				Debug("Missing report")
+			*oldAddReport.Available = removedReport
+			report.Reports = append(report.Reports, oldAddReport)
+		}
+	}
+	return report, nil
+}
+
 func (r *RouterHaProxy) Update(serviceReports []ServiceReport) error {
 	reloadNeeded := r.socketPath == ""
 	for _, report := range serviceReports {
-		front, back, err := r.toFrontendAndBackend(report)
+		updatedReport, err := r.DiffWithOldReport(report)
 		if err != nil {
-			return errs.WithEF(err, r.RouterCommon.fields.WithField("report", report), "Failed to prepare frontend and backend")
+			return errs.WithEF(err, r.RouterCommon.fields.WithField("report", updatedReport), "Failed to update report with old nodes")
 		}
-		r.Frontend[report.Service.Name+"_"+strconv.Itoa(report.Service.id)] = front
-		r.Backend[report.Service.Name+"_"+strconv.Itoa(report.Service.id)] = back
-		if !r.isSocketUpdatable(report) {
+		if !r.isSocketUpdatable(updatedReport) {
 			reloadNeeded = true
 		}
+		r.lastEvents[report.Service.Name] = &updatedReport
+		front, back, err := r.toFrontendAndBackend(updatedReport)
+		if err != nil {
+			return errs.WithEF(err, r.RouterCommon.fields.WithField("report", updatedReport), "Failed to prepare frontend and backend")
+		}
+		r.Frontend[updatedReport.Service.Name+"_"+strconv.Itoa(updatedReport.Service.id)] = front
+		r.Backend[updatedReport.Service.Name+"_"+strconv.Itoa(updatedReport.Service.id)] = back
 	}
 
 	if reloadNeeded {
@@ -168,7 +203,14 @@ func (r *RouterHaProxy) reportToHaProxyServer(report Report, serverOptions HapSe
 	}
 	buffer.WriteString(" ")
 	buffer.WriteString(res)
-
+	if *report.Available == false && !r.hapServerOptionsRegex.MatchString(report.HaProxyServerOptions) {
+		buffer.WriteString(" ")
+		buffer.WriteString("disabled")
+	}
+	if *report.Available == false {
+		buffer.WriteString(" ")
+		buffer.WriteString("#isDisabled")
+	}
 	return buffer.String(), nil
 }
 

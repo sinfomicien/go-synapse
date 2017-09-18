@@ -61,12 +61,14 @@ type HaProxyClient struct {
 	CleanupCommand           []string
 	CleanupTimeoutInMilli    int
 
-	reloadMutex sync.Mutex
-	socketPath  string
-	weightRegex *regexp.Regexp
-	lastReload  time.Time
-	template    *template.Template
-	fields      data.Fields
+	reloadMutex        sync.Mutex
+	socketPath         string
+	weightRegex        *regexp.Regexp
+	disabledRegex      *regexp.Regexp
+	hapAcceptableError *regexp.Regexp
+	lastReload         time.Time
+	template           *template.Template
+	fields             data.Fields
 }
 
 func (hap *HaProxyClient) Init() error {
@@ -93,7 +95,9 @@ func (hap *HaProxyClient) Init() error {
 		hap.CleanupTimeoutInMilli = 35 * 1000
 	}
 
-	hap.weightRegex = regexp.MustCompile(`server[\s]+([\S]+).*weight[\s]+([\d]+)`)
+	hap.weightRegex = regexp.MustCompile(`server[\s]+([\S]+)\s(\S+):(\d+)\sweight[\s]+([\d]+)`)
+	hap.disabledRegex = regexp.MustCompile(`#isDisabled`)
+	hap.hapAcceptableError = regexp.MustCompile(`^no\sneed\sto\schange.*`)
 
 	hap.socketPath = hap.findSocketPath()
 	if hap.socketPath == "" {
@@ -168,14 +172,29 @@ func (hap *HaProxyClient) SocketUpdate() error {
 	}
 	defer conn.Close()
 
-	i := 0
 	b := bytes.Buffer{}
-	for name, servers := range hap.Backend {
+	for backendName, servers := range hap.Backend {
 		for _, server := range servers {
 			res := hap.weightRegex.FindStringSubmatch(server)
-			if len(res) == 3 {
-				i++
-				b.WriteString("set weight " + name + "/" + res[1] + " " + res[2] + "\n")
+			isDisabled := hap.disabledRegex.MatchString(server)
+			if len(res) == 5 {
+				serverName := res[1]
+				serverIp := res[2]
+				weight := res[4]
+				logs.WithField("backendName", backendName).
+					WithField("serverName", serverName).
+					WithField("weight", weight).
+					WithField("ip", serverIp).
+					WithField("isDisabled", isDisabled).
+					Debug("Socket commands")
+				b.WriteString("set server " + backendName + "/" + serverName + " addr " + serverIp + ";\n")
+				b.WriteString("set server " + backendName + "/" + serverName + " weight " + weight + ";\n")
+				if isDisabled {
+					b.WriteString("set server " + backendName + "/" + serverName + " state maint ;\n")
+				} else {
+					b.WriteString("set server " + backendName + "/" + serverName + " state ready ;\n")
+				}
+
 			}
 		}
 	}
@@ -201,7 +220,7 @@ func (hap *HaProxyClient) SocketUpdate() error {
 	if err != nil || prefix {
 		return errs.WithEF(err, hap.fields.WithField("line-too-long", prefix), "Failed to read hap socket response")
 	}
-	if string(line) != "" {
+	if string(line) != "" && !hap.hapAcceptableError.MatchString(string(line)) {
 		return errs.WithF(hap.fields.WithField("response", string(line)), "Bad response for haproxy socket command")
 	}
 
