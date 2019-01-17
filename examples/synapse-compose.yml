@@ -1,0 +1,32 @@
+LogLevel: trace
+routers:
+  - type: haproxy
+    listen:
+      stats:
+        - mode http
+        - bind 0.0.0.0:1936
+        - stats enable
+        - stats uri /
+        - stats auth admin:admin
+        - timeout client  100s
+        - timeout server  100s
+        - timeout connect 100s
+        - timeout queue   100s
+    configPath: /haproxy.conf
+    reloadCommand: ["/haproxy-reload.sh"]
+    global:
+      - stats socket /haproxy.sock level admin
+    services:
+      - watcher:
+          type: zookeeper
+          hosts: ['zookeeper:2181']
+          path: /services/echoserver
+        routerOptions:
+          frontend:
+            - mode http
+            - bind 0.0.0.0:8080
+          backend:
+            - mode http
+            - timeout server 2m
+            - timeout connect 45s
+        serverOptions: check inter 1s rise 3 fall 2

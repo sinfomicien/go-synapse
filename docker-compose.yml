@@ -1,0 +1,20 @@
+version: "3.7"
+services:
+  synapse:
+    build: .
+    ports:
+      - "8080:8080"
+      - "1936:1936"
+    volumes:
+      - "./examples/synapse-compose.yml:/synapse.yml"
+
+  zookeeper:
+    image: 31z4/zookeeper
+    ports:
+      - "2181:2181"
+    
+  echoservera:
+    image: k8s.gcr.io/echoserver:1.10
+
+  echoserverb:
+    image: k8s.gcr.io/echoserver:1.10
