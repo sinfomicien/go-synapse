@@ -1,0 +1,8 @@
+port:
+  tcp6:3455:
+    listening: true
+    ip:
+    - '::'
+process:
+  synapse:
+    running: true
