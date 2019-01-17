@@ -2,9 +2,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-HAPROXY_PID="$(pgrep -o -x haproxy || true)"
-if [ -z "$HAPROXY_PID" ]; then
-	haproxy -W -D -f ${HAP_CONFIG}
+if [ ! -S "/haproxy-master.sock" ]; then
+	haproxy -W -S /haproxy-master.sock -D -f ${HAP_CONFIG}
 else
-	kill -USR2 "$HAPROXY_PID"
+	echo "reload" | nc -U /haproxy-master.sock
 fi

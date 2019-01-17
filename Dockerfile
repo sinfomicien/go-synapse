@@ -15,11 +15,10 @@ RUN ./gomake && \
 	cp ./dist/synapse-v0-linux-amd64/synapse /
 
 
-#FROM debian:stretch-slim
-FROM haproxy:1.8
+FROM haproxy:1.9
 
 RUN apt-get update && apt-get install -y \
-    procps \
+    netcat-openbsd \
 && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /synapse /
