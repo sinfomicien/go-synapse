@@ -15,7 +15,7 @@ RUN ./gomake && \
 	cp ./dist/synapse-v0-linux-amd64/synapse /
 
 
-FROM haproxy:1.9
+FROM haproxy:2.0.5
 
 RUN apt-get update && apt-get install -y \
     netcat-openbsd \
